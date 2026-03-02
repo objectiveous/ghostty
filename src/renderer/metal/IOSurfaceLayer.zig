@@ -84,10 +84,49 @@ pub inline fn setSurfaceSync(self: *IOSurfaceLayer, surface: *IOSurface) void {
     self.layer.setProperty("contents", surface);
 }
 
+/// Sets the layer's `contents` to the provided IOSurface without checking size.
+///
+/// This is intended for "re-present last frame" paths during resize where we want
+/// CoreAnimation to show the last good surface even if its dimensions don't match
+/// the current layer bounds.
+pub inline fn setSurfaceUnchecked(self: *IOSurfaceLayer, surface: *IOSurface) !void {
+    surface.retain();
+
+    var block = SetSurfaceUncheckedBlock.init(.{
+        .layer = self.layer.value,
+        .surface = surface,
+    }, &setSurfaceUncheckedCallback);
+
+    const NSThread = objc.getClass("NSThread").?;
+    if (NSThread.msgSend(bool, "isMainThread", .{})) {
+        setSurfaceUncheckedCallback(&block);
+    } else {
+        macos.dispatch.dispatch_async(
+            @ptrCast(macos.dispatch.queue.getMain()),
+            @ptrCast(&block),
+        );
+    }
+}
+
 const SetSurfaceBlock = objc.Block(struct {
     layer: objc.c.id,
     surface: *IOSurface,
 }, .{}, void);
+
+const SetSurfaceUncheckedBlock = objc.Block(struct {
+    layer: objc.c.id,
+    surface: *IOSurface,
+}, .{}, void);
+
+fn setSurfaceUncheckedCallback(
+    block: *const SetSurfaceUncheckedBlock.Context,
+) callconv(.c) void {
+    const layer = objc.Object.fromId(block.layer);
+    const surface: *IOSurface = block.surface;
+    defer surface.release();
+
+    layer.setProperty("contents", surface);
+}
 
 fn setSurfaceCallback(
     block: *const SetSurfaceBlock.Context,
