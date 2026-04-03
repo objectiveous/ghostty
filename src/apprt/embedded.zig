@@ -15,6 +15,7 @@ const input = @import("../input.zig");
 const internal_os = @import("../os/main.zig");
 const renderer = @import("../renderer.zig");
 const terminal = @import("../terminal/main.zig");
+const termio = @import("../termio.zig");
 const CoreApp = @import("../App.zig");
 const CoreInspector = @import("../inspector/main.zig").Inspector;
 const CoreSurface = @import("../Surface.zig");
@@ -405,9 +406,14 @@ pub const EnvVar = extern struct {
 };
 
 pub const Surface = struct {
+    const ManualIOWrite = *const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void;
+    const ManualIOResize = *const fn (?*anyopaque, u16, u16, u32, u32) callconv(.c) void;
+    const ManualIOFocus = *const fn (?*anyopaque, bool) callconv(.c) void;
+
     app: *App,
     platform: Platform,
     userdata: ?*anyopaque = null,
+    manual_io: ?termio.Manual.Config = null,
     core_surface: CoreSurface,
     content_scale: apprt.ContentScale,
     size: apprt.SurfaceSize,
@@ -459,6 +465,17 @@ pub const Surface = struct {
 
         /// Context for the new surface
         context: apprt.surface.NewSurfaceContext = .window,
+
+        /// Optional manual IO write callback. When set, the embedded runtime
+        /// does not spawn a subprocess and instead forwards terminal writes
+        /// through this callback.
+        io_write: ?ManualIOWrite = null,
+
+        /// Optional resize callback for manual IO surfaces.
+        io_resize: ?ManualIOResize = null,
+
+        /// Optional focus callback for manual IO surfaces.
+        io_focus: ?ManualIOFocus = null,
     };
 
     pub fn init(self: *Surface, app: *App, opts: Options) !void {
@@ -466,6 +483,12 @@ pub const Surface = struct {
             .app = app,
             .platform = try .init(opts.platform_tag, opts.platform),
             .userdata = opts.userdata,
+            .manual_io = if (opts.io_write) |write| .{
+                .userdata = opts.userdata,
+                .write = write,
+                .resize = opts.io_resize,
+                .focus = opts.io_focus,
+            } else null,
             .core_surface = undefined,
             .content_scale = .{
                 .x = @floatCast(opts.scale_factor),
@@ -939,7 +962,21 @@ pub const Surface = struct {
             .font_size = font_size,
             .working_directory = working_directory,
             .context = context,
+            .io_write = if (self.manual_io) |manual| manual.write else null,
+            .io_resize = if (self.manual_io) |manual| manual.resize else null,
+            .io_focus = if (self.manual_io) |manual| manual.focus else null,
         };
+    }
+
+    pub fn termioBackendConfig(
+        self: *const Surface,
+        exec_config: termio.Exec.Config,
+    ) termio.backend.Config {
+        if (self.manual_io) |manual_io| {
+            return .{ .manual = manual_io };
+        }
+
+        return .{ .exec = exec_config };
     }
 
     pub fn defaultTermioEnv(self: *const Surface) !std.process.EnvMap {
@@ -1590,6 +1627,32 @@ pub const CAPI = struct {
     /// Returns true if the surface process has exited.
     export fn ghostty_surface_process_exited(surface: *Surface) bool {
         return surface.core_surface.child_exited;
+    }
+
+    /// Feed externally produced terminal bytes into a manual IO surface.
+    export fn ghostty_surface_process_output(
+        surface: *Surface,
+        data: [*]const u8,
+        len: usize,
+    ) void {
+        if (len == 0) return;
+        surface.core_surface.io.processOutput(data[0..len]);
+    }
+
+    /// Notify a manual IO surface that its attached process or session exited.
+    export fn ghostty_surface_notify_child_exited(
+        surface: *Surface,
+        exit_code: u32,
+        runtime_ms: u64,
+    ) void {
+        surface.core_surface.handleMessage(.{
+            .child_exited = .{
+                .exit_code = exit_code,
+                .runtime_ms = runtime_ms,
+            },
+        }) catch |err| {
+            log.err("error notifying child exit err={}", .{err});
+        };
     }
 
     /// Returns true if the surface has a selection.

@@ -31,7 +31,38 @@ pub fn create(b: *std.Build, opts: Options) *LibtoolStep {
     const self = b.allocator.create(LibtoolStep) catch @panic("OOM");
 
     const run_step = RunStep.create(b, b.fmt("libtool {s}", .{opts.name}));
-    run_step.addArgs(&.{ "libtool", "-static", "-o" });
+    run_step.addArgs(&.{
+        "/bin/sh",
+        "-c",
+        \\set -eu
+        \\out="$1"
+        \\shift
+        \\work="$(mktemp -d "${TMPDIR:-/tmp}/ghostty-libtool.XXXXXX")"
+        \\trap 'rm -rf "$work"' EXIT
+        \\i=0
+        \\for src in "$@"; do
+        \\  dir="$work/$i"
+        \\  mkdir -p "$dir"
+        \\  case "$src" in
+        \\    /*) abs_src="$src" ;;
+        \\    *) abs_src="$PWD/$src" ;;
+        \\  esac
+        \\  (
+        \\    cd "$dir"
+        \\    /usr/bin/ar -x "$abs_src"
+        \\  )
+        \\  /bin/chmod -R u+rwX "$dir"
+        \\  i=$((i + 1))
+        \\done
+        \\if ! find "$work" -type f ! -name '__.SYMDEF' | grep -q .; then
+        \\  echo "no archive members extracted for libtool step" >&2
+        \\  exit 1
+        \\fi
+        \\find "$work" -type f ! -name '__.SYMDEF' -print0 | xargs -0 /usr/bin/libtool -static -o "$out"
+        ,
+        "ghostty-libtool",
+    });
+    run_step.setCwd(b.path("."));
     const output = run_step.addOutputFileArg(opts.out_name);
     for (opts.sources) |source| run_step.addFileArg(source);
 
