@@ -672,7 +672,7 @@ pub fn init(
         );
 
         // Initialize our IO backend
-        var io_exec = try termio.Exec.init(alloc, .{
+        const backend_config = rt_surface.termioBackendConfig(.{
             .command = command,
             .env = env,
             .env_override = config.env,
@@ -685,7 +685,8 @@ pub fn init(
             .rt_pre_exec_info = .init(config),
             .rt_post_fork_info = .init(config),
         });
-        errdefer io_exec.deinit();
+        var io_backend = try termio.Backend.init(alloc, backend_config);
+        errdefer io_backend.deinit();
 
         // Initialize our IO mailbox
         var io_mailbox = try termio.Mailbox.initSPSC(alloc);
@@ -695,7 +696,7 @@ pub fn init(
             .size = size,
             .full_config = config,
             .config = try termio.Termio.DerivedConfig.init(alloc, config),
-            .backend = .{ .exec = io_exec },
+            .backend = io_backend,
             .mailbox = io_mailbox,
             .renderer_state = &self.renderer_state,
             .renderer_wakeup = render_thread.wakeup,
@@ -1329,9 +1330,10 @@ fn childExitedAbnormally(
     const alloc = arena.allocator();
 
     // Build up our command for the error message
-    const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
-        .exec => |*exec| exec.subprocess.args,
-    });
+    const command = switch (self.io.backend) {
+        .exec => |*exec| try std.mem.join(alloc, " ", exec.subprocess.args),
+        .manual => try alloc.dupe(u8, "external session"),
+    };
     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
 
     self.renderer_state.mutex.lock();
