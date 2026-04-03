@@ -478,6 +478,9 @@ typedef struct {
   const char* initial_input;
   bool wait_after_command;
   ghostty_surface_context_e context;
+  void (*io_write)(void*, const uint8_t*, size_t);
+  void (*io_resize)(void*, uint16_t, uint16_t, uint32_t, uint32_t);
+  void (*io_focus)(void*, bool);
 } ghostty_surface_config_s;
 
 typedef struct {
@@ -1108,6 +1111,8 @@ GHOSTTY_API ghostty_surface_config_s ghostty_surface_inherited_config(ghostty_su
 GHOSTTY_API void ghostty_surface_update_config(ghostty_surface_t, ghostty_config_t);
 GHOSTTY_API bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
 GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
+GHOSTTY_API void ghostty_surface_process_output(ghostty_surface_t, const uint8_t*, size_t);
+GHOSTTY_API void ghostty_surface_notify_child_exited(ghostty_surface_t, uint32_t, uint64_t);
 GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);
